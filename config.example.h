@@ -1,0 +1,1 @@
+decode_type_t protocol = decode_type_t::NEC;
