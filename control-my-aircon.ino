@@ -8,14 +8,24 @@
 #include <IRutils.h>
 #include "config.h"
 
-const uint16_t kIrLed = D1;
+unsigned long lastSentTime = 0;
 
 WiFiEventHandler gotIpEventHandler;
 ESP8266WebServer server(port);
 IRac ac(kIrLed);
+IRrecv irrecv(kIrReceiver, kCaptureBufferSize, kTimeout, true);
+decode_results results;
+stdAc::state_t acState;
 
-String acStateToSerializedJson(stdAc::state_t acState) {
-  JsonDocument doc;
+void sendWithCors(int code, const String& contentType, const String& message) {
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, PUT, POST, PATCH, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+  server.send(code, contentType, message);
+}
+
+String acStateToSerializedJsonString(stdAc::state_t acState, bool pretty = false) {
+  JsonDocument<1024> doc;
 
   doc["protocol"] = acState.protocol;
   doc["model"] = acState.model;
@@ -40,23 +50,81 @@ String acStateToSerializedJson(stdAc::state_t acState) {
   doc["sensorTemperature"] = acState.sensorTemperature;
 
   String output;
-  serializeJson(doc, output);
+
+  if (pretty) {
+    serializeJsonPretty(doc, output);
+  } else {
+    serializeJson(doc, output);
+  }
 
   return output;
 }
 
-void handleGetState() {
-  stdAc::state_t acState = ac.getState();
-  String state = acStateToSerializedJson(acState);
-  server.send(200, "text/plain", state);
+void serializedJsonToAcState(String input) {
+  JsonDocument<1024> doc;
+  DeserializationError error = deserializeJson(doc, input);
+  if (error) {
+    Serial.print("Failed deserializing JSON. Returned: ");
+    Serial.println(error.c_str());
+    sendWithCors(400, "application/json", "{\"ok\": false, \"error\": \"Invalid JSON\"}");
+    return;
+  }
+
+  ac.next.model = doc["model"] | acState.model;
+  ac.next.power = doc["power"] | acState.power;
+  ac.next.mode = ac.strToOpmode((doc["mode"] | ac.opmodeToString(acState.mode)).c_str());
+  ac.next.degrees = doc["degrees"] | acState.degrees;
+  ac.next.celsius = doc["celsius"] | acState.celsius;
+  ac.next.fanspeed = ac.strToFanspeed((doc["fanspeed"] | ac.fanspeedToString(acState.fanspeed)).c_str());
+  ac.next.swingv = ac.strToSwingV((doc["swingv"] | ac.swingvToString(acState.swingv)).c_str());
+  ac.next.swingh = ac.strToSwingH((doc["swingh"] | ac.swinghToString(acState.swingh)).c_str());
+  ac.next.quiet = doc["quiet"] | acState.quiet;
+  ac.next.turbo = doc["turbo"] | acState.turbo;
+  ac.next.econo = doc["econo"] | acState.econo;
+  ac.next.light = doc["light"] | acState.light;
+  ac.next.filter = doc["filter"] | acState.filter;
+  ac.next.clean = doc["clean"] | acState.clean;
+  ac.next.beep = doc["beep"] | acState.beep;
+  ac.next.sleep = doc["sleep"] | acState.sleep;
+  ac.next.clock = doc["clock"] | acState.clock;
+  ac.next.command = ac.strToCommandType((doc["command"] | ac.commandTypeToString(acState.command)).c_str());
+  ac.next.iFeel = doc["iFeel"] | acState.iFeel;
+  ac.next.sensorTemperature = doc["sensorTemperature"] | acState.sensorTemperature;
+
+  sendState();
 }
 
 void handleRoot() {
-  server.send(200, "text/plain", rootText);
+  sendWithCors(200, "text/plain", rootText);
 }
 
 void handleGetAlive() {
-  server.send(200, "text/plain", "I am alive!");
+  sendWithCors(200, "text/plain", "I am alive!");
+}
+
+void handleGetState() {
+  String state = acStateToSerializedJsonString(acState);
+  sendWithCors(200, "application/json", state);
+}
+
+void handlePutState() {
+  String postBody = server.arg("plain");
+  serializedJsonToAcState(postBody);
+  sendWithCors(200, "application/json", "{ \"ok\": true }");
+}
+
+void restart() {
+  sendWithCors(200, "text/plain", "Restarting...");
+  delay(100);
+  ESP.restart();
+}
+
+void sendState() {
+  ac.sendAc();
+  lastSentTime = millis();
+  acState = ac.getState();
+  Serial.println("Sent state to aircon:");
+  Serial.println(acStateToSerializedJsonString(acState, true));
 }
 
 void handleGotIp(const WiFiEventStationModeGotIP& event) {
@@ -71,30 +139,21 @@ void handleGotIp(const WiFiEventStationModeGotIP& event) {
 }
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(kBaudRate);
 
+  // Device setup
+  irrecv.setTolerance(kTolerancePercentage);
+  irrecv.enableIRIn();
+
+  ac.next.protocol = protocol;  // Set a protocol to use.
+
+  acState = ac.getState();
+
+  // Network setup
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
-  gotIpEventHandler = WiFi.onStationModeGotIP(&handleGotIp);
 
-  ac.next.protocol = protocol;
-  ac.next.model = 1;
-  ac.next.mode = stdAc::opmode_t::kCool;
-  ac.next.celsius = true;
-  ac.next.degrees = 25;
-  ac.next.fanspeed = stdAc::fanspeed_t::kMedium;
-  ac.next.swingv = stdAc::swingv_t::kOff;
-  ac.next.swingh = stdAc::swingh_t::kOff;
-  ac.next.light = false;
-  ac.next.beep = false;
-  ac.next.econo = false;
-  ac.next.filter = false;
-  ac.next.turbo = false;
-  ac.next.quiet = false;
-  ac.next.sleep = -1;
-  ac.next.clean = false;
-  ac.next.clock = -1;
-  ac.next.power = false;
+  gotIpEventHandler = WiFi.onStationModeGotIP(&handleGotIp);
 
   // Ensure WiFi is connected before anything else
   Serial.print("Connecting");
@@ -102,7 +161,6 @@ void setup() {
     delay(500);
     Serial.print(".");
   }
-
   Serial.println();
 
   if (MDNS.begin(mDnsName)) {
@@ -111,35 +169,28 @@ void setup() {
 
   Serial.println();
 
+  // Server setup
   server.on("/", handleRoot);
   server.on("/alive", HTTP_GET, handleGetAlive);
   server.on("/state", HTTP_GET, handleGetState);
+  server.on("/state", HTTP_PUT, handlePutState);
+  server.on("/send", HTTP_POST, sendState);
+  server.on("/restart", restart);
 
   server.begin();
 }
 
 void loop() {
 
-  if (!ac.isProtocolSupported(protocol)) {
-    Serial.println("Selected protocol is not supported by library!");
-    delay(10000);
-    return;
-  }
-
   server.handleClient();
   MDNS.update();
 
-  // Serial.println("Protocol " + String(protocol) + " / " + typeToString(protocol) + " is supported.");
+  if (irrecv.decode(&results) && millis() - lastSentTime >= ignoreWindow) {
+      IRAcUtils::decodeToState(&results, &(ac.next));
+      if (echo) sendState();
+      else acState = ac.getState();
 
-  // ac.next.power = true;
-  // Serial.println("Turning the aircon on");
-  // ac.sendAc();
-  // delay(5000);
-
-  // ac.next.power = false;
-  // Serial.println("Turning the aircon off");
-  // ac.sendAc();
-  // delay(5000);
-
-  // Serial.println("Repeating\n");
+      Serial.println("Command received, new internal AC state: ");
+      Serial.println(acStateToSerializedJsonString(acState, true));
+  }
 }
