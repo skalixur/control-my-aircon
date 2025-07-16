@@ -69,11 +69,9 @@ void setup() {
     Serial.println("MDNS responder started sucessfully");
   }
 
-  server.on('/alive', HTTP_GET, []() {
-    server.send(200, "text/plain", "I am alive!")
+  server.on("/alive", HTTP_GET, []() {
+    server.send(200, "text/plain", "I am alive!");
   });
-
-  server.method()
 
   Serial.println();
 
