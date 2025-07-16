@@ -10,3 +10,6 @@ const char* password = "asd123";
 // Server Port.
 const uint16_t port = 80;
 const char* mDnsName = "aircon"; // -> aircon.local
+// Root text.
+// Text to be served to clients at the root path /
+const char* rootText = "This is the web server for my aircon.\r\n";
