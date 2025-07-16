@@ -25,7 +25,7 @@ void sendWithCors(int code, const String& contentType, const String& message) {
 }
 
 String acStateToSerializedJsonString(stdAc::state_t acState, bool pretty = false) {
-  JsonDocument<1024> doc;
+  StaticJsonDocument<1024> doc;
 
   doc["protocol"] = acState.protocol;
   doc["model"] = acState.model;
@@ -61,7 +61,7 @@ String acStateToSerializedJsonString(stdAc::state_t acState, bool pretty = false
 }
 
 void serializedJsonToAcState(String input) {
-  JsonDocument<1024> doc;
+  StaticJsonDocument<1024> doc;
   DeserializationError error = deserializeJson(doc, input);
   if (error) {
     Serial.print("Failed deserializing JSON. Returned: ");
