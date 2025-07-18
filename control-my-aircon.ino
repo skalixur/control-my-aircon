@@ -127,6 +127,7 @@ void setup() {
   Serial.println();
 
   // Server setup
+  server.on("/", HTTP_GET, handleRoot);
   server.on("/alive", HTTP_GET, handleGetAlive);
   server.on("/state", HTTP_GET, handleGetState);
   server.on("/state", HTTP_PUT, handlePutState);
