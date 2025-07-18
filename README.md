@@ -6,7 +6,13 @@ With the power of cheap Chinese electronics, of course.
 
 ## Usage
 
+1. Install dependencies.
 
+- ArduinoJson 7.4.2 (Benoit Blanchon)
+- IRremoteESP8266 2.8.6 (David Conran)
+- ESP8266WiFi
+- ESP8266WebServer
+- ESP8266mDNS
 
 ## Components
 

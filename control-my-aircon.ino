@@ -1,6 +1,6 @@
 #include <Arduino.h>
-#include <ArduinoJson.h>
 #include <IRremoteESP8266.h>
+#include <ArduinoJson.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 #include <ESP8266mDNS.h>
@@ -17,85 +17,19 @@ IRrecv irrecv(kIrReceiver, kCaptureBufferSize, kTimeout, true);
 decode_results results;
 stdAc::state_t acState;
 
-void sendWithCors(int code, const String& contentType, const String& message) {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  server.sendHeader("Access-Control-Allow-Methods", "GET, PUT, POST, PATCH, OPTIONS");
-  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
-  server.send(code, contentType, message);
-}
-
-String acStateToSerializedJsonString(stdAc::state_t acState, bool pretty = false) {
-  StaticJsonDocument<1024> doc;
-
-  doc["protocol"] = acState.protocol;
-  doc["model"] = acState.model;
-  doc["power"] = acState.power;
-  doc["mode"] = ac.opmodeToString(acState.mode);
-  doc["degrees"] = acState.degrees;
-  doc["celsius"] = acState.celsius;
-  doc["fanspeed"] = ac.fanspeedToString(acState.fanspeed);
-  doc["swingv"] = ac.swingvToString(acState.swingv);
-  doc["swingh"] = ac.swinghToString(acState.swingh);
-  doc["quiet"] = acState.quiet;
-  doc["turbo"] = acState.turbo;
-  doc["econo"] = acState.econo;
-  doc["light"] = acState.light;
-  doc["filter"] = acState.filter;
-  doc["clean"] = acState.clean;
-  doc["beep"] = acState.beep;
-  doc["sleep"] = acState.sleep;
-  doc["clock"] = acState.clock;
-  doc["command"] = ac.commandTypeToString(acState.command);
-  doc["iFeel"] = acState.iFeel;
-  doc["sensorTemperature"] = acState.sensorTemperature;
-
-  String output;
-
-  if (pretty) {
-    serializeJsonPretty(doc, output);
-  } else {
-    serializeJson(doc, output);
-  }
-
-  return output;
-}
-
-void serializedJsonToAcState(String input) {
-  StaticJsonDocument<1024> doc;
-  DeserializationError error = deserializeJson(doc, input);
-  if (error) {
-    Serial.print("Failed deserializing JSON. Returned: ");
-    Serial.println(error.c_str());
-    sendWithCors(400, "application/json", "{\"ok\": false, \"error\": \"Invalid JSON\"}");
-    return;
-  }
-
-  ac.next.model = doc["model"] | acState.model;
-  ac.next.power = doc["power"] | acState.power;
-  ac.next.mode = ac.strToOpmode((doc["mode"] | ac.opmodeToString(acState.mode)).c_str());
-  ac.next.degrees = doc["degrees"] | acState.degrees;
-  ac.next.celsius = doc["celsius"] | acState.celsius;
-  ac.next.fanspeed = ac.strToFanspeed((doc["fanspeed"] | ac.fanspeedToString(acState.fanspeed)).c_str());
-  ac.next.swingv = ac.strToSwingV((doc["swingv"] | ac.swingvToString(acState.swingv)).c_str());
-  ac.next.swingh = ac.strToSwingH((doc["swingh"] | ac.swinghToString(acState.swingh)).c_str());
-  ac.next.quiet = doc["quiet"] | acState.quiet;
-  ac.next.turbo = doc["turbo"] | acState.turbo;
-  ac.next.econo = doc["econo"] | acState.econo;
-  ac.next.light = doc["light"] | acState.light;
-  ac.next.filter = doc["filter"] | acState.filter;
-  ac.next.clean = doc["clean"] | acState.clean;
-  ac.next.beep = doc["beep"] | acState.beep;
-  ac.next.sleep = doc["sleep"] | acState.sleep;
-  ac.next.clock = doc["clock"] | acState.clock;
-  ac.next.command = ac.strToCommandType((doc["command"] | ac.commandTypeToString(acState.command)).c_str());
-  ac.next.iFeel = doc["iFeel"] | acState.iFeel;
-  ac.next.sensorTemperature = doc["sensorTemperature"] | acState.sensorTemperature;
-
-  sendState();
-}
+#include "ac_json.h"
 
 void handleRoot() {
-  sendWithCors(200, "text/plain", rootText);
+  decode_type_t currentAcProtocol = ac.getState().protocol;
+
+  String newRootText;
+  newRootText = rootText;
+  newRootText += "\r\nAircon Protocol : ";
+  newRootText += String(typeToString(currentAcProtocol));
+  newRootText += "\r\nProtocol Supported? : ";
+  newRootText += (ac.isProtocolSupported(currentAcProtocol) ? "true" : "false");
+
+  sendWithCors(200, "text/plain", newRootText);
 }
 
 void handleGetAlive() {
@@ -109,22 +43,43 @@ void handleGetState() {
 
 void handlePutState() {
   String postBody = server.arg("plain");
-  serializedJsonToAcState(postBody);
-  sendWithCors(200, "application/json", "{ \"ok\": true }");
+  bool wasSuccessful = sendSerializedJsonAcState(postBody);
+  if (wasSuccessful) {
+    sendWithCors(200, "application/json", "{ \"ok\": true }");
+  } else {
+    sendWithCors(400, "application/json", "{ \"ok\": false, \"error\": \"Failed to send state to aircon. (Unsupported protocol?)\" }");
+  }
+}
+
+void handleGetConfig() {
+  String config = configToJsonString();
+  sendWithCors(200, "application/json", config);
+}
+
+void handlePutConfig() {
+  String postBody = server.arg("plain");
+  bool error = setSerializedJsonConfig(postBody);
+
+  if (error) {
+    sendWithCors(400, "application/json", "{ \"ok\": false, \"error\": \"Failed to set config.\" }");
+  } else {
+    sendWithCors(200, "application/json", "{ \"ok\": true }");
+  }
+}
+
+void handleSendState() {
+  bool wasSuccessful = sendState();
+  if (wasSuccessful) {
+    sendWithCors(200, "application/json", "{ \"ok\": true }");
+  } else {
+    sendWithCors(400, "application/json", "{ \"ok\": false, \"error\": \"Failed to send state to aircon. (Unsupported protocol?)\" }");
+  }
 }
 
 void restart() {
   sendWithCors(200, "text/plain", "Restarting...");
   delay(100);
   ESP.restart();
-}
-
-void sendState() {
-  ac.sendAc();
-  lastSentTime = millis();
-  acState = ac.getState();
-  Serial.println("Sent state to aircon:");
-  Serial.println(acStateToSerializedJsonString(acState, true));
 }
 
 void handleGotIp(const WiFiEventStationModeGotIP& event) {
@@ -145,7 +100,7 @@ void setup() {
   irrecv.setTolerance(kTolerancePercentage);
   irrecv.enableIRIn();
 
-  ac.next.protocol = protocol;  // Set a protocol to use.
+  ac.next.protocol = protocol;
 
   acState = ac.getState();
 
@@ -164,18 +119,21 @@ void setup() {
   Serial.println();
 
   if (MDNS.begin(mDnsName)) {
-    Serial.println("MDNS responder started sucessfully");
+    Serial.println("MDNS responder started successfully.");
+  } else {
+    Serial.println("MDNS responser failed to start.")
   }
 
   Serial.println();
 
   // Server setup
-  server.on("/", handleRoot);
   server.on("/alive", HTTP_GET, handleGetAlive);
   server.on("/state", HTTP_GET, handleGetState);
   server.on("/state", HTTP_PUT, handlePutState);
-  server.on("/send", HTTP_POST, sendState);
-  server.on("/restart", restart);
+  server.on("/config", HTTP_GET, handleGetConfig);
+  server.on("/config", HTTP_PUT, handlePutConfig);
+  server.on("/resend", HTTP_POST, handleSendState);
+  server.on("/restart", HTTP_POST, restart);
 
   server.begin();
 }
@@ -186,11 +144,21 @@ void loop() {
   MDNS.update();
 
   if (irrecv.decode(&results) && millis() - lastSentTime >= ignoreWindow) {
+    decode_type_t savedProtocol = ac.getState().protocol;
+    int16_t savedModel = ac.getState().model;
+    if (echo) {
       IRAcUtils::decodeToState(&results, &(ac.next));
-      if (echo) sendState();
-      else acState = ac.getState();
+      // Don't affect the model as it frequently decodes the model/protocol incorrectly.
+      // This, in essence, only allows it to be changed through config.h or a PUT request.
+      ac.next.protocol = savedProtocol;
+      ac.next.model = savedModel;
+      sendState();
+    } else {
+      IRAcUtils::decodeToState(&results, &acState);
+      acState.protocol = savedProtocol;
+      acState.model = savedModel;
+    }
 
-      Serial.println("Command received, new internal AC state: ");
-      Serial.println(acStateToSerializedJsonString(acState, true));
+    Serial.println("Command received, new internal AC state: ");
+    Serial.println(acStateToSerializedJsonString(acState, true));
   }
-}

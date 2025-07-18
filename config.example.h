@@ -7,13 +7,15 @@ const byte kIrReceiver = D2;    // IR receiver input pin
 
 // === IR Redundancy Config ===
 // Whether to echo received IR signals to keep state consistent
-const bool echo = true;
+bool echo = true;
 // Ignore IR input for X ms after sending to prevent feedback loop
-const unsigned long ignoreWindow = 300;
+unsigned long ignoreWindow = 300;
 
-// === Aircon Protocol ===
-// See full list here: https://github.com/crankyoldgit/IRremoteESP8266/blob/master/src/IRac.cpp
+// === Aircon Protocol & Model ===
+// See full list of protocols here: https://github.com/crankyoldgit/IRremoteESP8266/blob/master/src/IRac.cpp
 const decode_type_t protocol = decode_type_t::COOLIX;
+// See full list of models here: https://github.com/crankyoldgit/IRremoteESP8266/blob/master/src/IRsend.h
+const int16_t model = 0;
 
 // === WiFi Config ===
 // Replace with your WiFi credentials
