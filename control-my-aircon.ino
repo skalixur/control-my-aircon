@@ -17,9 +17,37 @@ WiFiEventHandler gotIpEventHandler;
 IRac ac(kIrLed);
 IRrecv irrecv(kIrReceiver, kCaptureBufferSize, kTimeout, true);
 decode_results results;
-stdAc::state_t acState;
 
 #include "discovery.h"
+
+bool sendDiscoveryPayloads() {
+  bool p0 = publishDiscoveryPayloadClimate();
+  bool p1 = publishDiscoveryPayloadText("Protocol", "protocol", "remote-tv");
+  bool p2 = publishDiscoveryPayloadNumber("Model", "model", "identifier", -1, 100, "box");
+  // Power
+  // Mode
+  // Degrees
+  // Celsius
+  // Fanspeed
+  // Swing vertical
+  // Swing horizontal
+  bool p3 = publishDiscoveryPayloadSwitch("Quiet", "quiet", "volume-mute");
+  bool p4 = publishDiscoveryPayloadSwitch("Turbo", "turbo", "car-turbocharger");
+  bool p5 = publishDiscoveryPayloadSwitch("Econo", "econo", "sprout");
+  bool p6 = publishDiscoveryPayloadSwitch("Light", "light", "lightbulb");
+  bool p7 = publishDiscoveryPayloadSwitch("Filter", "filter", "air-filter");
+  bool p8 = publishDiscoveryPayloadSwitch("Clean", "clean", "vacuum");
+  bool p9 = publishDiscoveryPayloadSwitch("Beep", "beep", "home-sound-in");
+  bool p10 = publishDiscoveryPayloadNumber("Sleep", "sleep", "bed-clock", -1, 32767, "box");
+  bool p11 = publishDiscoveryPayloadNumber("Clock", "clock", "clock", -1, 1440, "box");
+  bool p12 = publishDiscoveryPayloadSelectCommand("Command", "command", "tune");
+  bool p13 = publishDiscoveryPayloadSwitch("iFeel", "iFeel", "home-thermometer");
+  // Runtime config
+  bool p14 = publishDiscoveryPayloadSwitch("Controller Echo", "echo", "repeat");
+  bool p15 = publishDiscoveryPayloadNumber("Controller Ignore Window", "ignoreWindow", "timer-sand", 0, 2000, "slider");
+  bool p16 = publishDiscoveryPayloadButton("Controller Restart", "restart", "restart", "restart");
+  return p0 && p1 && p2 && p3 && p4 && p5 && p6 && p7 && p8 && p9 && p10 && p11 && p12 && p13 && p14 && p15 && p16;
+}
 
 String getAcStateJson(stdAc::state_t acState, bool pretty = false) {
   JsonDocument doc;
@@ -62,41 +90,13 @@ bool sendState() {
   Serial.println(getAcStateJson(ac.next, true));
   bool wasSuccessful = ac.sendAc();
   lastSentTime = millis();
-  acState = ac.getState();
+
   if (wasSuccessful) {
     Serial.println("Sent state to aircon.");
   } else {
     Serial.println("Failed to send state to aircon.");
   }
   return wasSuccessful;
-}
-
-bool sendDiscoveryPayloads() {
-  bool p0 = publishDiscoveryPayloadClimate();
-  bool p1 = publishDiscoveryPayloadText("Protocol", "protocol", "remote-tv");
-  bool p2 = publishDiscoveryPayloadNumber("Model", "model", "identifier", -1, 100, "box");
-  // Power
-  // Mode
-  // Degrees
-  // Celsius
-  // Fanspeed
-  // Swing vertical
-  // Swing horizontal
-  bool p3 = publishDiscoveryPayloadSwitch("Quiet", "quiet", "volume-mute");
-  bool p4 = publishDiscoveryPayloadSwitch("Turbo", "turbo", "car-turbocharger");
-  bool p5 = publishDiscoveryPayloadSwitch("Econo", "econo", "sprout");
-  bool p6 = publishDiscoveryPayloadSwitch ("Light", "light", "lightbulb");
-  bool p7 = publishDiscoveryPayloadSwitch("Filter", "filter", "air-filter");
-  bool p8 = publishDiscoveryPayloadSwitch("Clean", "clean", "vacuum");
-  bool p9 = publishDiscoveryPayloadSwitch("Beep", "beep", "home-sound-in");
-  bool p10 = publishDiscoveryPayloadNumber("Sleep", "sleep", "bed-clock", -1, 32767, "box");
-  bool p11 = publishDiscoveryPayloadNumber("Clock", "clock", "clock", -1, 1440, "box");
-  bool p12 = publishDiscoveryPayloadText("Command", "command", "tune");
-  bool p13 = publishDiscoveryPayloadSwitch("iFeel", "iFeel", "home-thermometer");
-  // Runtime config
-  bool p14 = publishDiscoveryPayloadSwitch("Echo", "echo", "repeat");
-  bool p15 = publishDiscoveryPayloadNumber("Ignore Window", "ignoreWindow", "timer-sand", 0, 65535, "slider");
-  return p0 && p1 && p2 && p3 && p4 && p5 && p6 && p7 && p8 && p9 && p10 && p11 && p12 && p13;
 }
 
 void restart() {
@@ -145,30 +145,135 @@ bool connectMqtt() {
   return client.connect(uniqueId.c_str(), username, password, availabilityTopic.c_str(), 0, true, "offline");
 }
 
+bool publishFullState() {
+  JsonDocument doc;
+
+  stdAc::state_t currentState = ac.getStatePrev();
+
+  // Climate
+  doc["currentTemperature"] = currentState.sensorTemperature;
+  doc["temperature"] = currentState.degrees;
+  doc["fanMode"] = ac.fanspeedToString(currentState.fanspeed);
+  doc["mode"] = ac.opmodeToString(currentState.mode);
+  doc["swingHorizontalMode"] = ac.swinghToString(currentState.swingh);
+  doc["swingMode"] = ac.swingvToString(currentState.swingv);
+
+  doc["protocol"] = typeToString(currentState.protocol);
+  doc["model"] = currentState.model;
+  doc["quiet"] = currentState.quiet;
+  doc["turbo"] = currentState.turbo;
+  doc["econo"] = currentState.econo;
+  doc["light"] = currentState.light;
+  doc["filter"] = currentState.filter;
+  doc["clean"] = currentState.clean;
+  doc["beep"] = currentState.beep;
+  doc["sleep"] = currentState.sleep;
+  doc["clock"] = currentState.clock;
+  doc["command"] = ac.commandTypeToString(currentState.command);
+  doc["iFeel"] = currentState.iFeel;
+
+  // Runtime config
+  doc["echo"] = echo;
+  doc["ignoreWindow"] = ignoreWindow;
+
+  String output;
+
+  serializeJson(doc, output);
+
+  Serial.println("Publishing state: ");
+  serializeJsonPretty(doc, Serial);
+  Serial.println();
+
+  return client.publish(stateTopic.c_str(), output.c_str(), true);
+}
+
 void onMqttConnect() {
   // Send the discovery payload so Home Assistant knows we exist
   bool successful = sendDiscoveryPayloads();
-  client.publish(availabilityTopic.c_str(), "online", true);
   client.subscribe((commandTopic + "/#").c_str());
+  client.publish(availabilityTopic.c_str(), "online", true);
+  publishFullState();
+}
+
+bool onOffToBool(String command) {
+  return command == "ON" ? true : false;
 }
 
 void callback(char* topic, uint8_t* payload, size_t plength) {
 
   String command = "";
+
   Serial.print("Message arrived [");
   Serial.print(topic);
   Serial.print("] ");
+
   for (size_t i = 0; i < plength; i++) {
     command += (char)payload[i];
+
     Serial.print((char)payload[i]);
   }
-  String newTopic = String(topic);
-  newTopic.replace("set", "state");
 
-  client.publish(newTopic.c_str(), command.c_str());
+  String cleanedTopic = String(topic).substring(commandTopic.length());
+  Serial.println();
+  Serial.println(cleanedTopic);
+
+  if (cleanedTopic == "/beep") {
+    ac.next.beep = onOffToBool(command);
+  } else if (cleanedTopic == "/clean") {
+    ac.next.clean = onOffToBool(command);
+  } else if (cleanedTopic == "/controller_echo") {
+    echo = onOffToBool(command);
+  } else if (cleanedTopic == "/econo") {
+    ac.next.econo = onOffToBool(command);
+  } else if (cleanedTopic == "/filter") {
+    ac.next.filter = onOffToBool(command);
+  } else if (cleanedTopic == "/ifeel") {
+    ac.next.iFeel = onOffToBool(command);
+  } else if (cleanedTopic == "/light") {
+    ac.next.light = onOffToBool(command);
+  } else if (cleanedTopic == "/quiet") {
+    ac.next.quiet = onOffToBool(command);
+  } else if (cleanedTopic == "/turbo") {
+    ac.next.turbo = onOffToBool(command);
+  } else if (cleanedTopic == "/clock") {
+    ac.next.clock = command.toInt();
+  } else if (cleanedTopic == "/command") {
+    ac.next.command = ac.strToCommandType(command.c_str());
+  } else if (cleanedTopic == "/controller_ignore_window") {
+    ignoreWindow = command.toInt();
+  } else if (cleanedTopic == "/clock") {
+    ac.next.clock = command.toFloat();
+  } else if (cleanedTopic == "/command") {
+    ac.next.command = ac.strToCommandType(command.c_str());
+  } else if (cleanedTopic == "/model") {
+    ac.next.model = ac.strToModel(command.c_str());
+  } else if (cleanedTopic == "/protocol") {
+    ac.next.protocol = strToDecodeType(command.c_str());
+  } else if (cleanedTopic == "/sleep") {
+    ac.next.sleep = command.toInt();
+  } else if (cleanedTopic == "/temperature") {
+    ac.next.degrees = command.toFloat();
+  } else if (cleanedTopic == "/fan_mode") {
+    ac.next.fanspeed = ac.strToFanspeed(command.c_str());
+  } else if (cleanedTopic == "/mode") {
+    ac.next.mode = ac.strToOpmode(command.c_str());
+
+    if (ac.next.mode == stdAc::opmode_t::kOff) ac.next.power = false;
+    else ac.next.power = true;
+
+  } else if (cleanedTopic == "/swing_horizontal_mode") {
+    ac.next.swingh = ac.strToSwingH(command.c_str());
+  } else if (cleanedTopic == "/swing_mode") {
+    ac.next.swingv = ac.strToSwingV(command.c_str());
+  } else if (cleanedTopic == "/controller_restart") {
+    restart();
+  }
 
   Serial.println();
+  sendState();
+  publishFullState();
 }
+
 
 void reconnect() {
   while (!client.connected()) {
@@ -196,9 +301,8 @@ void setup() {
   client.setCallback(callback);
 
   ac.next.protocol = protocol;
+  ac.next.model = model;
   ac.next.celsius = celsius;
-
-  acState = ac.getState();
 
   // Ensure WiFi is connected before anything else
   setupWifi();
@@ -223,12 +327,14 @@ void loop() {
       ac.next.model = savedModel;
       sendState();
     } else {
-      IRAcUtils::decodeToState(&results, &acState);
-      acState.protocol = savedProtocol;
-      acState.model = savedModel;
+      IRAcUtils::decodeToState(&results, &ac.next);
+      ac.next.protocol = savedProtocol;
+      ac.next.model = savedModel;
+      ac.markAsSent();
     }
 
     Serial.println("Command received, new internal AC state: ");
-    Serial.println(getAcStateJson(acState, true));
+    Serial.println(getAcStateJson(ac.getStatePrev(), true));
+    publishFullState();
   }
 }

@@ -69,7 +69,6 @@ bool publishDiscoveryPayloadClimate() {
   fanModes.add("Minimum");
   fanModes.add("Low");
   fanModes.add("Medium");
-  fanModes.add("Medium-High");
   fanModes.add("High");
   fanModes.add("Max");
 
@@ -88,12 +87,11 @@ bool publishDiscoveryPayloadClimate() {
   swingModes.add("Auto");
   swingModes.add("Highest");
   swingModes.add("High");
-  swingModes.add("Upper Middle");
   swingModes.add("Middle");
   swingModes.add("Low");
   swingModes.add("Lowest");
 
-  doc["optimistic"] = true;  // debug
+  doc["optimistic"] = false;  // debug
   doc["retain"] = true;
 
   doc["payload_on"] = "ON";  // shouldn't be necessary
@@ -104,27 +102,41 @@ bool publishDiscoveryPayloadClimate() {
     doc["temperature_unit"] = "F";
   }
 
+  doc["min_temp"] = minTemp;
+  doc["max_temp"] = maxTemp;
+
   doc["power_command_topic"] = commandTopic + "/power";
 
   doc["current_temperature_topic"] = stateTopic;
-  doc["current_temperature_template"] = "{{ value_json.currentTemperature }}"; // currentTemperature
+  doc["current_temperature_template"] = R"(
+  {% if value_json.currentTemperature == -100 %}
+    "None"
+  {% else %}
+    {{ value_json.currentTemperature }}
+  {% endif %}
+)";  // currentTemperature
 
   doc["temperature_state_topic"] = stateTopic;
-  doc["temperature_state_template"] = "{{value_json.temperature}}"; // temperature
+  doc["temperature_state_template"] = "{{ value_json.temperature }}";  // temperature
 
   doc["fan_mode_state_topic"] = stateTopic;
-  doc["fan_mode_state_template"] = "{{value_json.fanMode}}"; // fanMode
+  doc["fan_mode_state_template"] = "{{ value_json.fanMode }}";  // fanMode
 
   doc["mode_state_topic"] = stateTopic;
-  doc["mode_state_template"] = "{{value_json.mode}}"; // mode
+  doc["mode_state_template"] = R"(
+  {% if value_json.mode == "Fan" %}
+    fan_only
+  {% else %}
+    {{ value_json.mode | lower }}
+  {% endif %}
+)";  // mode
+
 
   doc["swing_horizontal_mode_state_topic"] = stateTopic;
-  doc["swing_horizontal_mode_state_template"] = "{{ value_json.swingHorizontalMode }}"; // swingHorizontalMode
+  doc["swing_horizontal_mode_state_template"] = "{{ value_json.swingHorizontalMode }}";  // swingHorizontalMode
 
   doc["swing_mode_state_topic"] = stateTopic;
-  doc["swing_mode_state_template"] = "{{ value_json.swingMode }}"; // swingMode
-
-  //TODO: INSERT TEMPLATES
+  doc["swing_mode_state_template"] = "{{ value_json.swingMode }}";  // swingMode
 
   doc["temperature_command_topic"] = commandTopic + "/temperature";
   doc["fan_mode_command_topic"] = commandTopic + "/fan_mode";
@@ -147,7 +159,7 @@ bool publishDiscoveryPayloadSwitch(String label, String templateName, String ico
 
   doc["command_topic"] = commandTopic + "/" + cleanLabel;
   doc["state_topic"] = stateTopic;
-  doc["value_template"] = "{{ value_json." + templateName + " }}";
+  doc["value_template"] = "{{ 'ON' if value_json." + templateName + " == true else 'OFF' }}";
   doc["platform"] = component;
   doc["payload_off"] = "OFF";
   doc["payload_on"] = "ON";
@@ -169,7 +181,6 @@ bool publishDiscoveryPayloadNumber(String label, String templateName, String ico
   doc["command_topic"] = commandTopic + "/" + cleanLabel;
   doc["state_topic"] = stateTopic;
   doc["value_template"] = "{{ value_json." + templateName + " }}";
-  //TODO: insert template
   doc["platform"] = component;
   doc["payload_off"] = "OFF";
   doc["payload_on"] = "ON";
@@ -196,10 +207,59 @@ bool publishDiscoveryPayloadText(String label, String templateName, String icon)
   doc["command_topic"] = commandTopic + "/" + cleanLabel;
   doc["state_topic"] = stateTopic;
   doc["value_template"] = "{{ value_json." + templateName + " }}";
-  //TODO: insert template
   doc["platform"] = component;
   doc["payload_off"] = "OFF";
-  doc["paylod_on"] = "ON";
+  doc["payload_on"] = "ON";
+  doc["icon"] = "mdi:" + icon;
+
+  return publishPayload(doc, discoveryTopic);
+}
+
+// Specifically for Command Select
+bool publishDiscoveryPayloadSelectCommand(String label, String templateName, String icon) {
+  JsonDocument doc;
+  String component = "select";
+
+  String discoveryTopic = attachNameDependentInfo(doc, component, label);
+  attachAvailabilityInfo(doc);
+  attachDeviceInfo(doc);
+
+  String cleanLabel = clean(label);
+
+  doc["command_topic"] = commandTopic + "/" + cleanLabel;
+  doc["state_topic"] = stateTopic;
+  doc["value_template"] = "{{ value_json." + templateName + " }}";
+  doc["platform"] = component;
+  doc["payload_off"] = "OFF";
+  doc["payload_on"] = "ON";
+  doc["icon"] = "mdi:" + icon;
+
+  JsonArray options = doc["options"].to<JsonArray>();
+  options.add("Control");
+  options.add("IFeel Report");
+  options.add("Set Timer");
+  options.add("Config");
+
+  return publishPayload(doc, discoveryTopic);
+}
+
+bool publishDiscoveryPayloadButton(String label, String templateName, String icon, String deviceClass) {
+  JsonDocument doc;
+  String component = "button";
+
+  String discoveryTopic = attachNameDependentInfo(doc, component, label);
+  attachAvailabilityInfo(doc);
+  attachDeviceInfo(doc);
+
+  String cleanLabel = clean(label);
+
+  doc["command_topic"] = commandTopic + "/" + cleanLabel;
+  doc["state_topic"] = stateTopic;
+  doc["value_template"] = "{{ value_json." + templateName + " }}";
+  doc["platform"] = component;
+  doc["payload_off"] = "OFF";
+  doc["payload_on"] = "ON";
+  doc["class"] = deviceClass;
   doc["icon"] = "mdi:" + icon;
 
   return publishPayload(doc, discoveryTopic);
