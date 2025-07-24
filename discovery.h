@@ -1,4 +1,11 @@
 
+String clean(String label) {
+  String cleanLabel = label;
+  cleanLabel.trim();
+  cleanLabel.toLowerCase();
+  cleanLabel.replace(" ", "_");
+  return cleanLabel;
+}
 
 void attachDeviceInfo(JsonDocument& doc) {
   JsonObject device = doc["device"].to<JsonObject>();
@@ -14,9 +21,7 @@ void attachAvailabilityInfo(JsonDocument& doc) {
 }
 
 String attachNameDependentInfo(JsonDocument& doc, String component, String label) {
-  String cleanLabel = label;
-  cleanLabel.trim();
-  cleanLabel.toLowerCase();
+  String cleanLabel = clean(label);
 
   String objectId;
   objectId = uniqueId + "_" + cleanLabel;
@@ -102,11 +107,22 @@ bool publishDiscoveryPayloadClimate() {
   doc["power_command_topic"] = commandTopic + "/power";
 
   doc["current_temperature_topic"] = stateTopic;
+  doc["current_temperature_template"] = "{{ value_json.currentTemperature }}"; // currentTemperature
+
   doc["temperature_state_topic"] = stateTopic;
+  doc["temperature_state_template"] = "{{value_json.temperature}}"; // temperature
+
   doc["fan_mode_state_topic"] = stateTopic;
+  doc["fan_mode_state_template"] = "{{value_json.fanMode}}"; // fanMode
+
   doc["mode_state_topic"] = stateTopic;
+  doc["mode_state_template"] = "{{value_json.mode}}"; // mode
+
   doc["swing_horizontal_mode_state_topic"] = stateTopic;
+  doc["swing_horizontal_mode_state_template"] = "{{ value_json.swingHorizontalMode }}"; // swingHorizontalMode
+
   doc["swing_mode_state_topic"] = stateTopic;
+  doc["swing_mode_state_template"] = "{{ value_json.swingMode }}"; // swingMode
 
   //TODO: INSERT TEMPLATES
 
@@ -119,7 +135,7 @@ bool publishDiscoveryPayloadClimate() {
   return publishPayload(doc, discoveryTopic);
 }
 
-bool publishDiscoveryPayloadSwitch(String label, String icon) {
+bool publishDiscoveryPayloadSwitch(String label, String templateName, String icon) {
   JsonDocument doc;
   String component = "switch";
 
@@ -127,29 +143,20 @@ bool publishDiscoveryPayloadSwitch(String label, String icon) {
   attachAvailabilityInfo(doc);
   attachDeviceInfo(doc);
 
-  String cleanLabel = label;
-  cleanLabel.trim();
-  cleanLabel.toLowerCase();
+  String cleanLabel = clean(label);
 
   doc["command_topic"] = commandTopic + "/" + cleanLabel;
   doc["state_topic"] = stateTopic;
-  //TODO: insert template
+  doc["value_template"] = "{{ value_json." + templateName + " }}";
   doc["platform"] = component;
   doc["payload_off"] = "OFF";
-  doc["paylod_on"] = "ON";
+  doc["payload_on"] = "ON";
   doc["icon"] = "mdi:" + icon;
-
-  if (component == "number") {
-    // doc["min"] = 0;
-    // doc["max"] = 12;
-    // doc["step"] = 1;
-    doc["mode"] = "box";
-  }
 
   return publishPayload(doc, discoveryTopic);
 }
 
-bool publishDiscoveryPayloadNumber(String label, String icon, int min, int max, String mode) {
+bool publishDiscoveryPayloadNumber(String label, String templateName, String icon, int min, int max, String mode) {
   JsonDocument doc;
   String component = "number";
 
@@ -157,16 +164,15 @@ bool publishDiscoveryPayloadNumber(String label, String icon, int min, int max, 
   attachAvailabilityInfo(doc);
   attachDeviceInfo(doc);
 
-  String cleanLabel = label;
-  cleanLabel.trim();
-  cleanLabel.toLowerCase();
+  String cleanLabel = clean(label);
 
   doc["command_topic"] = commandTopic + "/" + cleanLabel;
   doc["state_topic"] = stateTopic;
+  doc["value_template"] = "{{ value_json." + templateName + " }}";
   //TODO: insert template
   doc["platform"] = component;
   doc["payload_off"] = "OFF";
-  doc["paylod_on"] = "ON";
+  doc["payload_on"] = "ON";
   doc["icon"] = "mdi:" + icon;
 
   doc["min"] = min;
@@ -177,7 +183,7 @@ bool publishDiscoveryPayloadNumber(String label, String icon, int min, int max, 
   return publishPayload(doc, discoveryTopic);
 }
 
-bool publishDiscoveryPayloadText(String label, String icon) {
+bool publishDiscoveryPayloadText(String label, String templateName, String icon) {
   JsonDocument doc;
   String component = "text";
 
@@ -185,12 +191,11 @@ bool publishDiscoveryPayloadText(String label, String icon) {
   attachAvailabilityInfo(doc);
   attachDeviceInfo(doc);
 
-  String cleanLabel = label;
-  cleanLabel.trim();
-  cleanLabel.toLowerCase();
+  String cleanLabel = clean(label);
 
   doc["command_topic"] = commandTopic + "/" + cleanLabel;
   doc["state_topic"] = stateTopic;
+  doc["value_template"] = "{{ value_json." + templateName + " }}";
   //TODO: insert template
   doc["platform"] = component;
   doc["payload_off"] = "OFF";
