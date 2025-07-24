@@ -333,6 +333,11 @@ void loop() {
       ac.markAsSent();
     }
 
+    if(!ac.getState().power) {
+      ac.next.mode = stdAc::opmode_t::kOff;
+      ac.markAsSent();
+    }
+
     Serial.println("Command received, new internal AC state: ");
     Serial.println(getAcStateJson(ac.getStatePrev(), true));
     publishFullState();
