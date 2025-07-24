@@ -24,13 +24,108 @@
     <input id="password" type="text">
     <br>
     <label for="location">location</label>*
-    <input id="location" type="text">
+    <input value="bedroom" id="location" type="text">
     <br>
-    <button id="connect">connect</button>
+    <label for="server">mqtt/ws server</label>*
+    <input value="wss://aircon.skalixur.com/mqtt" id="server" type="text">
+    <br>
+    <button class="connect">connect</button>
   </div>
-  <h1>aircon control panel</h1>
-  <i>trolololol</i>
-  <p>connection status: <span class="connection-status bad">not connected</span></p>
+  <div>
+    <h1>aircon control panel</h1>
+    <i>trolololol</i>
+    <p>connection status: <span class="connection-status bad">not connected</span></p>
+
+
+    <label for="mode">mode <code class="mode-state"></code> :</label>
+    <select id="mode">
+      <option value="auto">off</option>
+      <option value="auto">auto</option>
+      <option value="cool">cool</option>
+      <option value="dry">dry</option>
+      <option value="fan_only">fan</option>
+      <option value="heat">heat</option>
+    </select>
+    <br>
+
+    <label for="temperature">temperature <code class="temperature-state"></code> :</label>
+    <input type="number" name="temperature" id="temperature" min="16" max="30" step="1">
+    <br>
+
+    <label for="fan_mode">fan mode <code class="fan-mode-state"></code> :</label>
+    <select id="fan_mode">
+      <option value="auto">auto</option>
+      <option value="min">min</option>
+      <option value="low">low</option>
+      <option value="medium">medium</option>
+      <option value="high">high</option>
+      <option value="max">max</option>
+    </select>
+    <br>
+
+    <label for="swing_vertical">swing vertical <code class="swing-vertical-state"></code> :</label>
+    <select id="swing_vertical">
+      <option value="off">off</option>
+      <option value="auto">auto</option>
+    </select>
+    <br>
+
+    <label for="swing_horizontal">swing horizontal <code class="swing-horizontal-state"></code> :</label>
+    <select id="swing_horizontal">
+      <option value="off">off</option>
+      <option value="auto">auto</option>
+    </select>
+    <br>
+
+    <label for="quiet">quiet <code class="quiet-state"></code> :</label>
+    <select id="quiet">
+      <option value="off">off</option>
+      <option value="on">on</option>
+    </select>
+    <br>
+
+    <label for="turbo">turbo <code class="turbo-state"></code> :</label>
+    <select id="turbo">
+      <option value="off">off</option>
+      <option value="on">on</option>
+    </select>
+    <br>
+
+    <label for="econo">econo <code class="econo-state"></code> :</label>
+    <select id="econo">
+      <option value="off">off</option>
+      <option value="on">on</option>
+    </select>
+    <br>
+
+    <label for="light">light <code class="light-state"></code> :</label>
+    <select id="light">
+      <option value="off">off</option>
+      <option value="on">on</option>
+    </select>
+    <br>
+
+    <label for="filter">filter <code class="filter-state"></code> :</label>
+    <select id="filter">
+      <option value="off">off</option>
+      <option value="on">on</option>
+    </select>
+    <br>
+
+    <label for="clean">clean <code class="clean-state"></code> :</label>
+    <select id="clean">
+      <option value="off">off</option>
+      <option value="on">on</option>
+    </select>
+    <br>
+
+    <label for="beep">beep <code class="beep-state"></code> :</label>
+    <select id="beep">
+      <option value="off">off</option>
+      <option value="on">on</option>
+    </select>
+    <br>
+  </div>
 
 </body>
 
