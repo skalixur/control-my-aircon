@@ -1,0 +1,17 @@
+body {
+  background-color: #222;
+}
+
+.bad {
+  color: #F00;
+  font-weight: bold;
+}
+
+.good {
+  color: #5F5;
+  font-weight: bold;
+}
+
+i {
+  color: #555;
+}
