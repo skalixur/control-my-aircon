@@ -4,12 +4,15 @@ I want to control my aircon from anywhere. But how?
 
 With the power of cheap Chinese electronics, of course.
 
+This is an MQTT device which integrates with Home Assistant to control your aircon via IR through the IRremoteESP8266 library. A separate server is also in the repo to interface with MQTT over WebSockets, so you can control your aircon from anywhere with a web browser (without Home Assistant).
+
 ## Usage
 
 1. Install dependencies.
 
 - ArduinoJson 7.4.2 (Benoit Blanchon)
 - IRremoteESP8266 2.8.6 (David Conran)
+- PubSubClient3 (Nick O'Leary)
 - ESP8266WiFi
 - ESP8266WebServer
 - ESP8266mDNS
@@ -22,7 +25,11 @@ Copy `config.example.h` to `config.h` and fill in your aircon's protocol, model,
 
 4. Connect to the ESP8266's WiFi network.
 
-5. Send requests as needed to the server. See endpoints below for more details.
+5. Install Home Assistant and add the MQTT integration.
+
+6. Home Assistant should auto-discover the device, and you can begin controlling your aircon.
+
+_To use without Home Assistant, skip steps 5 and 6 and use the web interface instead._
 
 ## Components
 
@@ -38,124 +45,3 @@ Copy `config.example.h` to `config.h` and fill in your aircon's protocol, model,
 By default, the IR LED (or transistor gate) is connected to D1. The IR receiver is connected to D2.
 
 These can be updated in the `config.h` file. See `config.example.h` for more details.
-
-## Endpoints
-
-|  HTTP Method   |   Endpoint      |
-|--------------- | --------------- |
-|       GET      |       `/`       |
-|       GET      |    `/alive`     |
-|       GET      |    `/state`     |
-|       PUT      |     `/state`    |
-|       GET      |    `/config`    |
-|       PUT      |    `/config`    |
-|      POST      |    `/resend`    |
-|      POST      |   `/restart`    |
-
-### GET `/`
-
-Returns `rootMessage` as defined in `config.h` as well as the current AC protocol and whether or not it is supported. Always responds with HTTP Code 200.
-
-### GET `/alive`
-
-Always responds with the text `I am alive!` and HTTP Code 200.
-
-### GET `/state`
-
-Returns the current state of the aircon, as a JSON object. Always responds with HTTP Code 200.
-
-Example response:
-
-```json
-{
-    "protocol": 49,
-    "model": 0,
-    "power": false,
-    "mode": "Auto",
-    "degrees": 26,
-    "celsius": true,
-    "fanspeed": "Auto",
-    "swingv": "Auto",
-    "swingh": "Auto",
-    "quiet": false,
-    "turbo": false,
-    "econo": false,
-    "light": false,
-    "filter": false,
-    "clean": false,
-    "beep": false,
-    "sleep": -1,
-    "clock": -1,
-    "command": "Control",
-    "iFeel": false,
-    "sensorTemperature": -100
-}
-```
-
-### PUT `/state`
-
-Sets the internal state and external state of the aircon by sending it as an IR message. Responds with HTTP Code 200 unless the message failed to send.
-
-The body of the request should be a JSON object. Not all properties are required to be present. Example body:
-
-```json
-{
-    "power": true,
-    "mode": "Cool",
-    "degrees": 19
-}
-```
-
-Example response:
-
-```json
-{
-    "ok": true
-}
-```
-
-### GET `/config`
-
-Returns the current runtime-editable config, as a JSON object. Always responds with HTTP Code 200.
-
-Example response:
-
-```json
-{
-    "echo": true,
-    "ignoreWindow": 300
-}
-```
-
-### PUT `/config`
-
-Sets the runtime-editable config of the server. Responds with HTTP Code 200 unless malformed JSON is received.
-
-The body of the request should be a JSON object. Not all properties are required to be present. Example body:
-
-```json
-{
-    "echo": false,
-    "ignoreWindow": 10000
-}
-```
-
-Example response:
-
-```json
-{
-    "ok": true
-}
-```
-
-### POST `/resend`
-
-Resends the internal state of the aircon through an IR message. Calling this is not necessary in most scenarios as an IR message is already sent when PUT `/state` is called.
-
-### POST `/restart`
-
-Restarts the ESP8266, by calling
-
-```ino
-ESP.restart();
-```
