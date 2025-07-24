@@ -6,8 +6,8 @@ const connectButton = document.querySelector(".connect");
 const connectionStatus = document.querySelector(".connection-status");
 
 const clientOptions = {
-  username: "public",
-  password: "public",
+  username: "",
+  password: "",
 };
 
 const options = {
