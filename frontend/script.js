@@ -15,6 +15,12 @@ const options = {
   location: "",
 };
 
+options.location = locationInput.value;
+
+let isAcAvailable = false;
+let stateTopic = `${options.location}/ac/state`;
+let commandTopic = `${options.location}/ac/set`;
+
 usernameInput.addEventListener("change", () => {
   clientOptions.username = usernameInput.value;
 });
@@ -25,15 +31,13 @@ passwordInput.addEventListener("change", () => {
 
 locationInput.addEventListener("change", () => {
   options.location = locationInput.value;
+  stateTopic = `${options.location}/ac/state`;
+  commandTopic = `${options.location}/ac/set`;
 });
 
 connectButton.addEventListener("click", () => {
   go();
 });
-
-let isAcAvailable = false;
-const stateTopic = `${options.location}/ac/state`;
-const commandTopic = `${options.location}/ac/set`;
 
 function bad() {
   connectionStatus.innerText = "disconnected";
@@ -166,7 +170,6 @@ function setupControlHandlers(client) {
     });
   }
   if (turboInput) {
-    console.log("turbo changed");
     turboInput.addEventListener("change", () => {
       publish(`${commandTopic}/turbo`, boolToOnOff(turboInput.value === "on"));
     });
@@ -212,8 +215,8 @@ function go() {
     connectionStatus.innerText = "connected";
     connectionStatus.classList.remove("bad");
     connectionStatus.classList.add("good");
-    console.log("connected");
-    client.subscribe(`${stateTopic}/#`, (err) => {
+    console.log(stateTopic);
+    client.subscribe(`${stateTopic}`, (err) => {
       if (err) console.log(err);
     });
     setupControlHandlers(client);
