@@ -6,78 +6,62 @@
 #include <ESP8266mDNS.h>
 #include <IRac.h>
 #include <IRutils.h>
+#include <PubSubClient.h>
 #include "config.h"
 
 unsigned long lastSentTime = 0;
 
+WiFiClient espClient;
+PubSubClient client(espClient);
 WiFiEventHandler gotIpEventHandler;
-ESP8266WebServer server(port);
 IRac ac(kIrLed);
 IRrecv irrecv(kIrReceiver, kCaptureBufferSize, kTimeout, true);
 decode_results results;
 stdAc::state_t acState;
 
-#include "ac_json.h"
+#include "discovery.h"
 
-void handleRoot() {
-  decode_type_t currentAcProtocol = ac.getState().protocol;
-
-  String newRootText;
-  newRootText = rootText;
-  newRootText += "\r\nAircon Protocol : ";
-  newRootText += String(typeToString(currentAcProtocol));
-  newRootText += "\r\nProtocol Supported? : ";
-  newRootText += (ac.isProtocolSupported(currentAcProtocol) ? "true" : "false");
-
-  sendWithCors(200, "text/plain", newRootText);
-}
-
-void handleGetAlive() {
-  sendWithCors(200, "text/plain", "I am alive!");
-}
-
-void handleGetState() {
-  String state = acStateToSerializedJsonString(acState);
-  sendWithCors(200, "application/json", state);
-}
-
-void handlePutState() {
-  String postBody = server.arg("plain");
-  bool wasSuccessful = sendSerializedJsonAcState(postBody);
+bool sendState() {
+  Serial.println("Attempting to send AC state to aircon:");
+  Serial.println(acStateToSerializedJsonString(ac .next, true));
+  bool wasSuccessful = ac.sendAc();
+  lastSentTime = millis();
+  acState = ac.getState();
   if (wasSuccessful) {
-    sendWithCors(200, "application/json", "{ \"ok\": true }");
+    Serial.println("Sent state to aircon.");
   } else {
-    sendWithCors(400, "application/json", "{ \"ok\": false, \"error\": \"Failed to send state to aircon. (Unsupported protocol?)\" }");
+    Serial.println("Failed to send state to aircon.");
   }
+  return wasSuccessful;
 }
 
-void handleGetConfig() {
-  String config = configToJsonString();
-  sendWithCors(200, "application/json", config);
-}
-
-void handlePutConfig() {
-  String postBody = server.arg("plain");
-  bool error = setSerializedJsonConfig(postBody);
-
-  if (error) {
-    sendWithCors(400, "application/json", "{ \"ok\": false, \"error\": \"Failed to set config.\" }");
-  } else {
-    sendWithCors(200, "application/json", "{ \"ok\": true }");
-  }
-}
-
-void handleSendState() {
-  bool wasSuccessful = sendState();
-  if (wasSuccessful) {
-    sendWithCors(200, "application/json", "{ \"ok\": true }");
-  } else {
-    sendWithCors(400, "application/json", "{ \"ok\": false, \"error\": \"Failed to send state to aircon. (Unsupported protocol?)\" }");
-  }
+bool sendDiscoveryPayloads() {
+  bool p0 = publishDiscoveryPayloadClimate();
+  bool p1 = publishDiscoveryPayloadText("Protocol", "remote-tv");
+  bool p2 = publishDiscoveryPayloadNumber("Model", "identifier", -1, 100, "box");
+  // Power
+  // Mode
+  // Degrees
+  // Celsius
+  // Fanspeed
+  // Swing vertical
+  // Swing horizontal
+  bool p3 = publishDiscoveryPayloadSwitch("Quiet", "volume-mute");
+  bool p4 = publishDiscoveryPayloadSwitch("Turbo", "car-turbocharger");
+  bool p5 = publishDiscoveryPayloadSwitch("Econo", "sprout");
+  bool p6 = publishDiscoveryPayloadSwitch ("Light", "lightbulb");
+  bool p7 = publishDiscoveryPayloadSwitch("Filter", "air-filter");
+  bool p8 = publishDiscoveryPayloadSwitch("Clean", "vacuum");
+  bool p9 = publishDiscoveryPayloadSwitch("Beep", "home-sound-in");
+  bool p10 = publishDiscoveryPayloadNumber("Sleep", "bed-clock", -1, 32767, "box");
+  bool p11 = publishDiscoveryPayloadNumber("Clock", "clock", -1, 1440, "box");
+  bool p12 = publishDiscoveryPayloadText("Command", "tune");
+  bool p13 = publishDiscoveryPayloadSwitch("iFeel", "home-thermometer");
+  return p0 && p1 && p2 && p3 && p4 && p5 && p6 && p7 && p8 && p9 && p10 && p11 && p12 && p13;
 }
 
 void restart() {
-  sendWithCors(200, "text/plain", "Restarting...");
+  client.publish(availabilityTopic.c_str(), "offline", true);
   delay(100);
   ESP.restart();
 }
@@ -93,24 +77,15 @@ void handleGotIp(const WiFiEventStationModeGotIP& event) {
   Serial.println(WiFi.macAddress());
 }
 
-void setup() {
-  Serial.begin(kBaudRate);
-
-  // Device setup
-  irrecv.setTolerance(kTolerancePercentage);
-  irrecv.enableIRIn();
-
-  ac.next.protocol = protocol;
-
-  acState = ac.getState();
-
+void setupWifi() {
   // Network setup
   WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
+  WiFi.begin(ssid, wifiPassword);
 
   gotIpEventHandler = WiFi.onStationModeGotIP(&handleGotIp);
 
-  // Ensure WiFi is connected before anything else
+  delay(2000);
+
   Serial.print("Connecting");
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -121,27 +96,80 @@ void setup() {
   if (MDNS.begin(mDnsName)) {
     Serial.println("MDNS responder started successfully.");
   } else {
-    Serial.println("MDNS responser failed to start.")
+    Serial.println("MDNS responder failed to start.");
   }
 
   Serial.println();
+}
 
-  // Server setup
-  server.on("/", HTTP_GET, handleRoot);
-  server.on("/alive", HTTP_GET, handleGetAlive);
-  server.on("/state", HTTP_GET, handleGetState);
-  server.on("/state", HTTP_PUT, handlePutState);
-  server.on("/config", HTTP_GET, handleGetConfig);
-  server.on("/config", HTTP_PUT, handlePutConfig);
-  server.on("/resend", HTTP_POST, handleSendState);
-  server.on("/restart", HTTP_POST, restart);
+bool connectMqtt() {
+  return client.connect(uniqueId.c_str(), username, password, availabilityTopic.c_str(), 0, true, "offline");
+}
 
-  server.begin();
+void onMqttConnect() {
+  // Send the discovery payload so Home Assistant knows we exist
+  bool successful = sendDiscoveryPayloads();
+  client.publish(availabilityTopic.c_str(), "online", true);
+  client.subscribe((commandTopic + "/#").c_str());
+}
+
+void callback(char* topic, uint8_t* payload, size_t plength) {
+
+  String command = "";
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
+  for (size_t i = 0; i < plength; i++) {
+    command += (char)payload[i];
+    Serial.print((char)payload[i]);
+  }
+  String newTopic = String(topic);
+  newTopic.replace("set", "state");
+
+  client.publish(newTopic.c_str(), command.c_str());
+
+  Serial.println();
+}
+
+void reconnect() {
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    if (connectMqtt()) {
+      Serial.println("connected!");
+      onMqttConnect();
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      delay(5000);
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(kBaudRate);
+
+  // Device setup
+  irrecv.setTolerance(kTolerancePercentage);
+  irrecv.enableIRIn();
+
+  client.setServer(server, port);
+  client.setCallback(callback);
+
+  ac.next.protocol = protocol;
+
+  acState = ac.getState();
+
+  // Ensure WiFi is connected before anything else
+  setupWifi();
 }
 
 void loop() {
+  if (!client.connected()) {
+    reconnect();
+  }
 
-  server.handleClient();
+  client.loop();
   MDNS.update();
 
   if (irrecv.decode(&results) && millis() - lastSentTime >= ignoreWindow) {
@@ -163,3 +191,4 @@ void loop() {
     Serial.println("Command received, new internal AC state: ");
     Serial.println(acStateToSerializedJsonString(acState, true));
   }
+}
