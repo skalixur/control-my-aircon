@@ -10,6 +10,8 @@ const byte kIrReceiver = D2;  // IR receiver input pin
 bool echo = true;
 // Ignore IR input for X ms after sending to prevent feedback loop
 int ignoreWindow = 300;
+// How long to wait before sending the state again after a change (to prevent rapid updates)
+unsigned long debounceDelay = 1000;
 
 // === Aircon Config ===
 // See full list of protocols here: https://github.com/crankyoldgit/IRremoteESP8266/blob/master/src/IRac.cpp

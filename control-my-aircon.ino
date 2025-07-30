@@ -10,6 +10,17 @@
 #include "config.h"
 
 unsigned long lastSentTime = 0;
+unsigned long debounceStartTime = 0;
+bool pendingSend = false;
+
+unsigned long getElapsedTime(unsigned long startTime) {
+  unsigned long currentTime = millis();
+  if (currentTime >= startTime) {
+    return currentTime - startTime;
+  } else {
+    return (ULONG_MAX - startTime) + currentTime + 1;
+  }
+}
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -46,7 +57,8 @@ bool sendDiscoveryPayloads() {
   bool p14 = publishDiscoveryPayloadSwitch("Controller Echo", "echo", "repeat");
   bool p15 = publishDiscoveryPayloadNumber("Controller Ignore Window", "ignoreWindow", "timer-sand", 0, 2000, "slider");
   bool p16 = publishDiscoveryPayloadButton("Controller Restart", "restart", "restart", "restart");
-  return p0 && p1 && p2 && p3 && p4 && p5 && p6 && p7 && p8 && p9 && p10 && p11 && p12 && p13 && p14 && p15 && p16;
+  bool p17 = publishDiscoveryPayloadNumber("Controller Debounce Time", "debounceDelay", "timer-sand", 0, 2000, "slider");
+  return p0 && p1 && p2 && p3 && p4 && p5 && p6 && p7 && p8 && p9 && p10 && p11 && p12 && p13 && p14 && p15 && p16 && p17;
 }
 
 String getAcStateJson(stdAc::state_t acState, bool pretty = false) {
@@ -86,10 +98,37 @@ String getAcStateJson(stdAc::state_t acState, bool pretty = false) {
 }
 
 bool sendState() {
-  Serial.println("Attempting to send AC state to aircon:");
+  Serial.println("sendState() called - starting/restarting debounce timer");
+
+  // reset debounce timer
+  debounceStartTime = millis();
+  pendingSend = true;
+
+  return true;  // Always return true since we're deferring the actual send
+}
+
+bool executePendingSend() {
+  if (!pendingSend) {
+    return true;
+  }
+
+  if (getElapsedTime(debounceStartTime) < debounceDelay) {
+    Serial.println("Still waiting for debounce period before sending");
+    return false;
+  }
+
+  Serial.println("Debounce period elapsed - attempting to send AC state to aircon:");
   Serial.println(getAcStateJson(ac.next, true));
+
+  if (!ac.hasStateChanged()) {
+    Serial.println("AC state is identical, not sending state");
+    pendingSend = false;
+    return true;
+  }
+
   bool wasSuccessful = ac.sendAc();
   lastSentTime = millis();
+  pendingSend = false;
 
   if (wasSuccessful) {
     Serial.println("Sent state to aircon.");
@@ -175,6 +214,7 @@ bool publishFullState() {
   // Runtime config
   doc["echo"] = echo;
   doc["ignoreWindow"] = ignoreWindow;
+  doc["debounceDelay"] = debounceDelay;
 
   String output;
 
@@ -267,6 +307,8 @@ void callback(char* topic, uint8_t* payload, size_t plength) {
     ac.next.swingv = ac.strToSwingV(command.c_str());
   } else if (cleanedTopic == "/controller_restart") {
     restart();
+  } else if (cleanedTopic == "/debounce_delay") {
+    debounceDelay = command.toInt();
   }
 
   Serial.println();
@@ -316,7 +358,9 @@ void loop() {
   client.loop();
   MDNS.update();
 
-  if (irrecv.decode(&results) && millis() - lastSentTime >= ignoreWindow) {
+  executePendingSend();
+
+  if (irrecv.decode(&results) && getElapsedTime(lastSentTime) >= ignoreWindow) {
     decode_type_t savedProtocol = ac.getState().protocol;
     int16_t savedModel = ac.getState().model;
     if (echo) {
@@ -333,7 +377,7 @@ void loop() {
       ac.markAsSent();
     }
 
-    if(!ac.getState().power) {
+    if (!ac.getState().power) {
       ac.next.mode = stdAc::opmode_t::kOff;
       ac.markAsSent();
     }
