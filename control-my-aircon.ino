@@ -127,6 +127,7 @@ bool executePendingSend() {
   }
 
   bool wasSuccessful = ac.sendAc();
+  publishFullState();
   lastSentTime = millis();
   pendingSend = false;
 
@@ -313,7 +314,6 @@ void callback(char* topic, uint8_t* payload, size_t plength) {
 
   Serial.println();
   sendState();
-  publishFullState();
 }
 
 
