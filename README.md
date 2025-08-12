@@ -42,6 +42,10 @@ _To use without Home Assistant, skip steps 5 and 6 and use the web interface ins
 
 ## Pinout
 
-By default, the IR LED (or transistor gate) is connected to D1. The IR receiver is connected to D2.
+By default, the IR LED (or transistor gate) is connected to D1. The IR receiver is connected to D2. See the wiring diagram for more details.
 
 These can be updated in the `config.h` file. See `config.example.h` for more details.
+
+## Wiring Diagram
+
+<img width="896" height="462" alt="image" src="https://github.com/user-attachments/assets/859c85bf-13ab-4b83-9320-cddcd3bd351e" />
