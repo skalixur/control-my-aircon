@@ -1,389 +1,267 @@
+// control-my-aircon: an IR aircon controller that shows up in Home Assistant by itself.
+//
+// First boot: join the "Aircon Setup" WiFi network from your phone, pick your WiFi, enter your MQTT login,
+// then press any button on your aircon remote while pointing it at the device. That's it.
+//
+// Everything lives in src/. Optional compile-time overrides go in user_config.h (see user_config.example.h).
+
 #include <Arduino.h>
-#include <IRremoteESP8266.h>
-#include <ArduinoJson.h>
-#include <ESP8266WiFi.h>
-#include <ESP8266WebServer.h>
-#include <ESP8266mDNS.h>
-#include <IRac.h>
-#include <IRutils.h>
-#include <PubSubClient.h>
-#include "config.h"
+#include <ArduinoOTA.h>
+#include <WiFiManager.h>
 
-unsigned long lastSentTime = 0;
-unsigned long debounceStartTime = 0;
-bool pendingSend = false;
+#include "src/aircon.h"
+#include "src/defaults.h"
+#include "src/home_assistant.h"
+#include "src/platform.h"
+#include "src/settings.h"
+#include "src/status_led.h"
+#include "src/system.h"
+#include "src/web.h"
 
-unsigned long getElapsedTime(unsigned long startTime) {
-  unsigned long currentTime = millis();
-  if (currentTime >= startTime) {
-    return currentTime - startTime;
-  } else {
-    return (ULONG_MAX - startTime) + currentTime + 1;
-  }
-}
+const uint32_t kPortalTimeoutSeconds = 300;
+const uint32_t kOutagePortalTimeoutSeconds = 120;  // saved WiFi didn't connect, probably the router is still booting
+const uint32_t kFactoryResetHoldMs = 5000;
 
-WiFiClient espClient;
-PubSubClient client(espClient);
-WiFiEventHandler gotIpEventHandler;
-IRac ac(kIrLed);
-IRrecv irrecv(kIrReceiver, kCaptureBufferSize, kTimeout, true);
-decode_results results;
+String deviceId;  // "aircon_a1b2c3"
+String hostname;  // "aircon-a1b2c3" -> http://aircon-a1b2c3.local
 
-#include "discovery.h"
+// Setup portal fields. They live for the whole program because WiFiManager keeps pointers to them.
+WiFiManagerParameter introParam("<p style='opacity:.75'>Leave <b>MQTT server</b> blank to find Home Assistant's "
+                                "broker automatically. Use the same login you gave the Mosquitto add-on (any Home "
+                                "Assistant user works).</p>");
+WiFiManagerParameter nameParam("name", "Name", "", 40);
+WiFiManagerParameter roomParam("room", "Room (optional)", "", 40);
+WiFiManagerParameter mqttHostParam("mqtt_host", "MQTT server IP (blank = automatic)", "", 64);
+WiFiManagerParameter mqttPortParam("mqtt_port", "MQTT port", "", 6, "inputmode='numeric'");
+WiFiManagerParameter mqttUserParam("mqtt_user", "MQTT username", "", 64);
+WiFiManagerParameter mqttPasswordParam("mqtt_password", "MQTT password (blank = keep current)", "", 64, "type='password'");
+WiFiManagerParameter protocolParam("protocol", "Aircon protocol, e.g. COOLIX (optional, otherwise learned from the remote)",
+                                   "", 32);
+WiFiManagerParameter modelParam("model", "IR model (optional)", "", 6, "inputmode='numeric'");
+bool portalSaved = false;
+bool wifiSaveRequested = false;  // the WiFi page was submitted (vs. only the settings page)
 
-bool sendDiscoveryPayloads() {
-  bool p0 = publishDiscoveryPayloadClimate();
-  bool p1 = publishDiscoveryPayloadText("Protocol", "protocol", "remote-tv");
-  bool p2 = publishDiscoveryPayloadNumber("Model", "model", "identifier", -1, 100, "box");
-  // Power
-  // Mode
-  // Degrees
-  // Celsius
-  // Fanspeed
-  // Swing vertical
-  // Swing horizontal
-  bool p3 = publishDiscoveryPayloadSwitch("Quiet", "quiet", "volume-mute");
-  bool p4 = publishDiscoveryPayloadSwitch("Turbo", "turbo", "car-turbocharger");
-  bool p5 = publishDiscoveryPayloadSwitch("Econo", "econo", "sprout");
-  bool p6 = publishDiscoveryPayloadSwitch("Light", "light", "lightbulb");
-  bool p7 = publishDiscoveryPayloadSwitch("Filter", "filter", "air-filter");
-  bool p8 = publishDiscoveryPayloadSwitch("Clean", "clean", "vacuum");
-  bool p9 = publishDiscoveryPayloadSwitch("Beep", "beep", "home-sound-in");
-  bool p10 = publishDiscoveryPayloadNumber("Sleep", "sleep", "bed-clock", -1, 32767, "box");
-  bool p11 = publishDiscoveryPayloadNumber("Clock", "clock", "clock", -1, 1440, "box");
-  bool p12 = publishDiscoveryPayloadSelectCommand("Command", "command", "tune");
-  bool p13 = publishDiscoveryPayloadSwitch("iFeel", "iFeel", "home-thermometer");
-  // Runtime config
-  bool p14 = publishDiscoveryPayloadSwitch("Controller Echo", "echo", "repeat");
-  bool p15 = publishDiscoveryPayloadNumber("Controller Ignore Window", "ignoreWindow", "timer-sand", 0, 2000, "slider");
-  bool p16 = publishDiscoveryPayloadButton("Controller Restart", "restart", "restart", "restart");
-  bool p17 = publishDiscoveryPayloadNumber("Controller Debounce Time", "debounceDelay", "timer-sand", 0, 2000, "slider");
-  return p0 && p1 && p2 && p3 && p4 && p5 && p6 && p7 && p8 && p9 && p10 && p11 && p12 && p13 && p14 && p15 && p16 && p17;
-}
-
-String getAcStateJson(stdAc::state_t acState, bool pretty = false) {
-  JsonDocument doc;
-
-  doc["protocol"] = acState.protocol;
-  doc["model"] = acState.model;
-  doc["power"] = acState.power;
-  doc["mode"] = ac.opmodeToString(acState.mode);
-  doc["degrees"] = acState.degrees;
-  doc["celsius"] = acState.celsius;
-  doc["fanspeed"] = ac.fanspeedToString(acState.fanspeed);
-  doc["swingv"] = ac.swingvToString(acState.swingv);
-  doc["swingh"] = ac.swinghToString(acState.swingh);
-  doc["quiet"] = acState.quiet;
-  doc["turbo"] = acState.turbo;
-  doc["econo"] = acState.econo;
-  doc["light"] = acState.light;
-  doc["filter"] = acState.filter;
-  doc["clean"] = acState.clean;
-  doc["beep"] = acState.beep;
-  doc["sleep"] = acState.sleep;
-  doc["clock"] = acState.clock;
-  doc["command"] = ac.commandTypeToString(acState.command);
-  doc["iFeel"] = acState.iFeel;
-  doc["sensorTemperature"] = acState.sensorTemperature;
-
-  String output;
-
-  if (pretty) {
-    serializeJsonPretty(doc, output);
-  } else {
-    serializeJson(doc, output);
-  }
-
-  return output;
-}
-
-bool sendState() {
-  Serial.println("sendState() called - starting/restarting debounce timer");
-
-  // reset debounce timer
-  debounceStartTime = millis();
-  pendingSend = true;
-
-  return true;  // Always return true since we're deferring the actual send
-}
-
-bool executePendingSend() {
-  if (!pendingSend) {
-    return true;
-  }
-
-  if (getElapsedTime(debounceStartTime) < debounceDelay) {
-    Serial.println("Still waiting for debounce period before sending");
-    return false;
-  }
-
-  Serial.println("Debounce period elapsed - attempting to send AC state to aircon:");
-  Serial.println(getAcStateJson(ac.next, true));
-
-  if (!ac.hasStateChanged()) {
-    Serial.println("AC state is identical, not sending state");
-    pendingSend = false;
-    return true;
-  }
-
-  bool wasSuccessful = ac.sendAc();
-  publishFullState();
-  lastSentTime = millis();
-  pendingSend = false;
-
-  if (wasSuccessful) {
-    Serial.println("Sent state to aircon.");
-  } else {
-    Serial.println("Failed to send state to aircon.");
-  }
-  return wasSuccessful;
-}
-
-void restart() {
-  client.publish(availabilityTopic.c_str(), "offline", true);
-  delay(100);
-  ESP.restart();
-}
-
-void handleGotIp(const WiFiEventStationModeGotIP& event) {
-  Serial.print("Successfully connected to ");
-  Serial.println(WiFi.SSID());
-  Serial.print("Local IP Address: ");
-  Serial.println(WiFi.localIP());
-  Serial.print("Hostname: ");
-  Serial.println(WiFi.hostname());
-  Serial.print("MAC Address: ");
-  Serial.println(WiFi.macAddress());
-}
-
-void setupWifi() {
-  // Network setup
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, wifiPassword);
-
-  gotIpEventHandler = WiFi.onStationModeGotIP(&handleGotIp);
-
-  delay(2000);
-
-  Serial.print("Connecting");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println();
-
-  if (MDNS.begin(mDnsName)) {
-    Serial.println("MDNS responder started successfully.");
-  } else {
-    Serial.println("MDNS responder failed to start.");
-  }
-
-  Serial.println();
-}
-
-bool connectMqtt() {
-  return client.connect(uniqueId.c_str(), username, password, availabilityTopic.c_str(), 0, true, "offline");
-}
-
-bool publishFullState() {
-  JsonDocument doc;
-
-  stdAc::state_t currentState = ac.getStatePrev();
-
-  // Climate
-  doc["currentTemperature"] = currentState.sensorTemperature;
-  doc["temperature"] = currentState.degrees;
-  doc["fanMode"] = ac.fanspeedToString(currentState.fanspeed);
-  doc["mode"] = ac.opmodeToString(currentState.mode);
-  doc["swingHorizontalMode"] = ac.swinghToString(currentState.swingh);
-  doc["swingMode"] = ac.swingvToString(currentState.swingv);
-
-  doc["protocol"] = typeToString(currentState.protocol);
-  doc["model"] = currentState.model;
-  doc["quiet"] = currentState.quiet;
-  doc["turbo"] = currentState.turbo;
-  doc["econo"] = currentState.econo;
-  doc["light"] = currentState.light;
-  doc["filter"] = currentState.filter;
-  doc["clean"] = currentState.clean;
-  doc["beep"] = currentState.beep;
-  doc["sleep"] = currentState.sleep;
-  doc["clock"] = currentState.clock;
-  doc["command"] = ac.commandTypeToString(currentState.command);
-  doc["iFeel"] = currentState.iFeel;
-
-  // Runtime config
-  doc["echo"] = echo;
-  doc["ignoreWindow"] = ignoreWindow;
-  doc["debounceDelay"] = debounceDelay;
-
-  String output;
-
-  serializeJson(doc, output);
-
-  Serial.println("Publishing state: ");
-  serializeJsonPretty(doc, Serial);
-  Serial.println();
-
-  return client.publish(stateTopic.c_str(), output.c_str(), true);
-}
-
-void onMqttConnect() {
-  // Send the discovery payload so Home Assistant knows we exist
-  bool successful = sendDiscoveryPayloads();
-  client.subscribe((commandTopic + "/#").c_str());
-  client.publish(availabilityTopic.c_str(), "online", true);
-  publishFullState();
-}
-
-bool onOffToBool(String command) {
-  return command == "ON" ? true : false;
-}
-
-void callback(char* topic, uint8_t* payload, size_t plength) {
-
-  String command = "";
-
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-
-  for (size_t i = 0; i < plength; i++) {
-    command += (char)payload[i];
-
-    Serial.print((char)payload[i]);
-  }
-
-  String cleanedTopic = String(topic).substring(commandTopic.length());
-  Serial.println();
-  Serial.println(cleanedTopic);
-
-  if (cleanedTopic == "/beep") {
-    ac.next.beep = onOffToBool(command);
-  } else if (cleanedTopic == "/clean") {
-    ac.next.clean = onOffToBool(command);
-  } else if (cleanedTopic == "/controller_echo") {
-    echo = onOffToBool(command);
-  } else if (cleanedTopic == "/econo") {
-    ac.next.econo = onOffToBool(command);
-  } else if (cleanedTopic == "/filter") {
-    ac.next.filter = onOffToBool(command);
-  } else if (cleanedTopic == "/ifeel") {
-    ac.next.iFeel = onOffToBool(command);
-  } else if (cleanedTopic == "/light") {
-    ac.next.light = onOffToBool(command);
-  } else if (cleanedTopic == "/quiet") {
-    ac.next.quiet = onOffToBool(command);
-  } else if (cleanedTopic == "/turbo") {
-    ac.next.turbo = onOffToBool(command);
-  } else if (cleanedTopic == "/clock") {
-    ac.next.clock = command.toInt();
-  } else if (cleanedTopic == "/command") {
-    ac.next.command = ac.strToCommandType(command.c_str());
-  } else if (cleanedTopic == "/controller_ignore_window") {
-    ignoreWindow = command.toInt();
-  } else if (cleanedTopic == "/clock") {
-    ac.next.clock = command.toFloat();
-  } else if (cleanedTopic == "/command") {
-    ac.next.command = ac.strToCommandType(command.c_str());
-  } else if (cleanedTopic == "/model") {
-    ac.next.model = ac.strToModel(command.c_str());
-  } else if (cleanedTopic == "/protocol") {
-    ac.next.protocol = strToDecodeType(command.c_str());
-  } else if (cleanedTopic == "/sleep") {
-    ac.next.sleep = command.toInt();
-  } else if (cleanedTopic == "/temperature") {
-    ac.next.degrees = command.toFloat();
-  } else if (cleanedTopic == "/fan_mode") {
-    ac.next.fanspeed = ac.strToFanspeed(command.c_str());
-  } else if (cleanedTopic == "/mode") {
-    ac.next.mode = ac.strToOpmode(command.c_str());
-
-    if (ac.next.mode == stdAc::opmode_t::kOff) ac.next.power = false;
-    else ac.next.power = true;
-
-  } else if (cleanedTopic == "/swing_horizontal_mode") {
-    ac.next.swingh = ac.strToSwingH(command.c_str());
-  } else if (cleanedTopic == "/swing_mode") {
-    ac.next.swingv = ac.strToSwingV(command.c_str());
-  } else if (cleanedTopic == "/controller_restart") {
-    restart();
-  } else if (cleanedTopic == "/debounce_delay") {
-    debounceDelay = command.toInt();
-  }
-
-  Serial.println();
-  sendState();
-}
-
-
-void reconnect() {
-  while (!client.connected()) {
-    Serial.print("Attempting MQTT connection...");
-    if (connectMqtt()) {
-      Serial.println("connected!");
-      onMqttConnect();
-    } else {
-      Serial.print("failed, rc=");
-      Serial.print(client.state());
-      Serial.println(" try again in 5 seconds");
-      delay(5000);
+// WiFiManager pastes values into value='...' unescaped; an apostrophe ("Kid's Room") would truncate the field.
+String htmlEscape(const String& text) {
+  String escaped;
+  escaped.reserve(text.length());
+  for (size_t i = 0; i < text.length(); i++) {
+    switch (text[i]) {
+      case '&': escaped += F("&amp;"); break;
+      case '\'': escaped += F("&#39;"); break;
+      case '"': escaped += F("&quot;"); break;
+      case '<': escaped += F("&lt;"); break;
+      case '>': escaped += F("&gt;"); break;
+      default: escaped += text[i];
     }
+  }
+  return escaped;
+}
+
+void setParam(WiFiManagerParameter& param, const String& value) {
+  param.setValue(htmlEscape(value).c_str(), param.getValueLength());
+}
+
+void savePortalParams() {
+  settings.name = nameParam.getValue();
+  settings.name.trim();
+  if (settings.name.isEmpty()) settings.name = AIRCON_DEFAULT_NAME;
+  settings.room = roomParam.getValue();
+  settings.room.trim();
+  settings.mqttHost = mqttHostParam.getValue();
+  settings.mqttHost.trim();
+  int port = atoi(mqttPortParam.getValue());
+  settings.mqttPort = port > 0 && port < 65536 ? port : 1883;
+  settings.mqttUser = mqttUserParam.getValue();
+  String password = mqttPasswordParam.getValue();
+  if (!password.isEmpty()) settings.mqttPassword = password;  // the field is never pre-filled
+  settingsSave();
+
+  // aircon::apply validates the name, saves it and updates the live IR state.
+  String protocol = protocolParam.getValue();
+  protocol.trim();
+  if (!protocol.isEmpty() && aircon::apply("protocol", protocol.c_str()) != aircon::Result::kApplied) {
+    Serial.printf("[setup] \"%s\" isn't a protocol IRremoteESP8266 can send; learn it from the remote instead\n",
+                  protocol.c_str());
+  }
+  String model = modelParam.getValue();
+  model.trim();
+  if (!model.isEmpty()) aircon::apply("model", model.c_str());
+
+  portalSaved = true;
+  Serial.println(F("[setup] settings saved"));
+}
+
+void connectWifi() {
+  WiFiManager wm;
+  wm.setDebugOutput(false);
+  wm.setHostname(hostname);
+  wm.setTitle("Aircon setup");
+  wm.setDarkMode(true);
+  wm.setConnectTimeout(30);
+  wm.setConfigPortalBlocking(false);
+  std::vector<const char*> menu = { "wifi", "param", "info", "exit" };
+  wm.setMenu(menu);
+
+  setParam(nameParam, settings.name);
+  setParam(roomParam, settings.room);
+  setParam(mqttHostParam, settings.mqttHost);
+  setParam(mqttPortParam, String(settings.mqttPort));
+  setParam(mqttUserParam, settings.mqttUser);
+  setParam(protocolParam, settings.protocol);
+  setParam(modelParam, settings.model >= 0 ? String(settings.model) : String());
+  wm.addParameter(&introParam);
+  wm.addParameter(&nameParam);
+  wm.addParameter(&roomParam);
+  wm.addParameter(&mqttHostParam);
+  wm.addParameter(&mqttPortParam);
+  wm.addParameter(&mqttUserParam);
+  wm.addParameter(&mqttPasswordParam);
+  wm.addParameter(&protocolParam);
+  wm.addParameter(&modelParam);
+  wm.setSaveParamsCallback(savePortalParams);
+  // The WiFi page with an empty SSID only saves settings; anything else is a WiFi change WiFiManager will connect to.
+  wm.setPreSaveConfigCallback([&wm] {
+    wifiSaveRequested = !wm.server->arg("s").isEmpty() || !wm.server->arg("p").isEmpty();
+  });
+
+  // Credentials compiled in through user_config.h skip the portal entirely.
+  if (strlen(AIRCON_WIFI_SSID) > 0 && !wm.getWiFiIsSaved()) WiFi.begin(AIRCON_WIFI_SSID, AIRCON_WIFI_PASSWORD);
+
+  String apName = "Aircon Setup " + deviceId.substring(deviceId.length() - 4);
+  bool forcePortal = settings.openPortalOnBoot;
+  if (forcePortal) {
+    // A portal requested from Home Assistant opens once. On first boot it keeps reopening until settings are saved.
+    settings.openPortalOnBoot = false;
+    if (LittleFS.exists("/settings.json")) settingsSave();
+  }
+
+  bool hadWifi = wm.getWiFiIsSaved();
+  wm.setConfigPortalTimeout(hadWifi && !forcePortal ? kOutagePortalTimeoutSeconds : kPortalTimeoutSeconds);
+
+  bool connected = forcePortal ? wm.startConfigPortal(apName.c_str()) : wm.autoConnect(apName.c_str());
+  if (connected && !forcePortal) return;
+
+  Serial.printf("[setup] join the WiFi network \"%s\" and open http://192.168.4.1\n", apName.c_str());
+  statusLed::setPattern(statusLed::Pattern::kSetup);
+  while (wm.getConfigPortalActive()) {
+    if (wm.process()) break;  // new WiFi saved and connected
+    if (portalSaved && hadWifi && !wifiSaveRequested) {
+      // Only the name/MQTT/protocol settings changed. WiFiManager switched the station off while the portal was
+      // open, so the cleanest way back onto the saved WiFi is a restart.
+      Serial.println(F("[setup] restarting with the new settings"));
+      delay(1000);  // let the "saved" page reach the phone
+      ESP.restart();
+    }
+    aircon::loop();  // the remote can be learned while you're still in the portal
+    statusLed::loop();
+    delay(5);
+  }
+
+  if (WiFi.status() != WL_CONNECTED && hadWifi) {
+    WiFi.mode(WIFI_STA);
+    WiFi.begin();  // saved credentials
+    WiFi.waitForConnectResult(20000);
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println(F("[setup] no WiFi; restarting to try again"));
+    delay(500);
+    ESP.restart();
+  }
+}
+
+void setupOta() {
+  ArduinoOTA.setHostname(hostname.c_str());
+  if (strlen(AIRCON_OTA_PASSWORD) > 0) ArduinoOTA.setPassword(AIRCON_OTA_PASSWORD);
+  ArduinoOTA.onStart([] {
+    Serial.println(F("[ota] update starting"));
+    aircon::flush();
+    homeAssistant::goOffline();
+  });
+  ArduinoOTA.onError([](ota_error_t error) { Serial.printf("[ota] failed (%u)\n", error); });
+  ArduinoOTA.begin();
+}
+
+// Tap FLASH/BOOT: learn from remote. Hold 5 s: factory reset.
+void handleButton() {
+  if (AIRCON_BUTTON_PIN < 0) return;
+  static uint32_t pressedAt = 0;
+  static bool wasPressed = false;
+  bool pressed = digitalRead(AIRCON_BUTTON_PIN) == LOW;
+  uint32_t now = millis();
+
+  if (pressed && !wasPressed) pressedAt = now;
+  if (pressed && now - pressedAt >= kFactoryResetHoldMs) statusLed::setPattern(statusLed::Pattern::kResetArmed);
+
+  if (!pressed && wasPressed) {
+    uint32_t held = now - pressedAt;
+    if (held >= kFactoryResetHoldMs) {
+      Serial.println(F("[system] factory reset"));
+      settingsFactoryReset();
+      WiFiManager wm;
+      wm.resetSettings();
+      delay(200);
+      ESP.restart();
+    } else if (held >= 50) {
+      aircon::startLearning();
+    }
+  }
+  wasPressed = pressed;
+}
+
+void updateStatusLed() {
+  if (AIRCON_BUTTON_PIN >= 0 && digitalRead(AIRCON_BUTTON_PIN) == LOW) return;  // handleButton owns it
+  if (aircon::isLearning()) {
+    statusLed::setPattern(statusLed::Pattern::kLearning);
+  } else if (WiFi.status() != WL_CONNECTED || !homeAssistant::connected()) {
+    statusLed::setPattern(statusLed::Pattern::kConnecting);
+  } else {
+    statusLed::setPattern(statusLed::Pattern::kOff);
   }
 }
 
 void setup() {
-  Serial.begin(kBaudRate);
+  Serial.begin(115200);
+  delay(100);
+  Serial.println();
+  Serial.println(F("control-my-aircon " AIRCON_VERSION));
 
-  // Device setup
-  irrecv.setTolerance(kTolerancePercentage);
-  irrecv.enableIRIn();
+  statusLed::begin();
+  if (AIRCON_BUTTON_PIN >= 0) pinMode(AIRCON_BUTTON_PIN, INPUT_PULLUP);
+  bool fsReady = fsBegin();
+  if (!fsReady) Serial.println(F("[fs] LittleFS unavailable; settings won't survive a restart"));
+  // First boot of this firmware: show the portal even if the chip remembers WiFi from an older firmware,
+  // so the MQTT login gets asked for. Compiled-in credentials (user_config.h) skip it.
+  if (!settingsLoad() && fsReady && strlen(AIRCON_WIFI_SSID) == 0) settings.openPortalOnBoot = true;
 
-  client.setServer(server, port);
-  client.setCallback(callback);
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+  char suffix[7];
+  snprintf(suffix, sizeof(suffix), "%02x%02x%02x", mac[3], mac[4], mac[5]);
+  deviceId = String("aircon_") + suffix;
+  hostname = String("aircon-") + suffix;
 
-  ac.next.protocol = protocol;
-  ac.next.model = model;
-  ac.next.celsius = celsius;
+  aircon::begin();
+  connectWifi();
 
-  // Ensure WiFi is connected before anything else
-  setupWifi();
+  Serial.printf("[wifi] connected to %s as %s (http://%s.local)\n", WiFi.SSID().c_str(),
+                WiFi.localIP().toString().c_str(), hostname.c_str());
+
+  setupOta();
+  homeAssistant::begin(deviceId);
+  web::begin(deviceId);
 }
 
 void loop() {
-  if (!client.connected()) {
-    reconnect();
-  }
-
-  client.loop();
-  MDNS.update();
-
-  executePendingSend();
-
-  if (irrecv.decode(&results) && getElapsedTime(lastSentTime) >= ignoreWindow) {
-    decode_type_t savedProtocol = ac.getState().protocol;
-    int16_t savedModel = ac.getState().model;
-    if (echo) {
-      IRAcUtils::decodeToState(&results, &(ac.next));
-      // Don't affect the model as it frequently decodes the model/protocol incorrectly.
-      // This, in essence, only allows it to be changed through config.h or a PUT request.
-      ac.next.protocol = savedProtocol;
-      ac.next.model = savedModel;
-      sendState();
-    } else {
-      IRAcUtils::decodeToState(&results, &ac.next);
-      ac.next.protocol = savedProtocol;
-      ac.next.model = savedModel;
-      ac.markAsSent();
-    }
-
-    if (!ac.getState().power) {
-      ac.next.mode = stdAc::opmode_t::kOff;
-      ac.markAsSent();
-    }
-
-    Serial.println("Command received, new internal AC state: ");
-    Serial.println(getAcStateJson(ac.getStatePrev(), true));
-    publishFullState();
-  }
+  ArduinoOTA.handle();
+  mdnsLoop();
+  web::loop();
+  homeAssistant::loop();
+  aircon::loop();
+  systemControl::loop();
+  handleButton();
+  updateStatusLed();
+  statusLed::loop();
 }
